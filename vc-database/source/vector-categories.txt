@@ -1,0 +1,5 @@
+llmvcc-ops | Common operations for logic (or, and, xor), math like %^*/+-, comparisons (equal, not equal), and llmvcc stack like push, pop, print.
+
+sorting-ops | Common sorting algorithms like bubble sort, selection sort, insertion sort, merge sort, quick sort, heap sort.
+
+graphics-ops | Graphics and game operations for creating windows, drawing shapes, handling input, and building games like Pong.

@@ -1,0 +1,1517 @@
+// ============================================================================
+// VCS PSEUDO-CODE INTERPRETER SPECIFICATION
+// ============================================================================
+// 
+// A portable, multi-stack bytecode interpreter with shared state.
+// Designed for real-time utility theory patterns where multiple stacks
+// read/write shared variables concurrently.
+//
+// Features:
+//   - Turing complete (jumps, conditionals, memory operations)
+//   - Zero allocation at runtime (fixed-size arrays)
+//   - No reflection (static module table)
+//   - Multi-stack execution with shared RegisterFile
+//   - Load from string, stream, or file
+//
+// Porting Guide:
+//   C      : Use union for VcsValue, function pointers for modules
+//   C++    : Use std::variant or manual union, virtual interfaces
+//   Rust   : Use enum for VcsValue, traits for Module
+//   C#     : Use struct with [StructLayout], interfaces
+//   JS     : Use TypedArrays for performance, classes for structure
+//   Python : Use @dataclass, NumPy arrays for bulk operations
+//
+// ============================================================================
+
+
+// ============================================================================
+// SECTION 1: CONSTANTS & CONFIGURATION
+// ============================================================================
+
+const MAX_REGISTERS    = 1024   // Shared variable slots across all contexts
+const MAX_STACK        = 256    // Per-context value stack depth
+const MAX_PARAMS       = 8      // Maximum parameters per instruction
+const MAX_PROGRAMS     = 32     // Compiled program cache size
+const MAX_CONTEXTS     = 32     // Concurrent execution context pool
+const MAX_MODULES      = 16     // Static module table size
+const MAX_INSTRUCTIONS = 4096   // Maximum instructions per program
+const MAX_STRINGS      = 1024   // Interned string table size
+const MAX_STRING_LEN   = 256    // Maximum length of a single string
+
+
+// ============================================================================
+// SECTION 2: VcsValue (TAGGED UNION - 16 BYTES)
+// ============================================================================
+// 
+// A discriminated union that holds any value type without boxing.
+// Memory layout is cache-aligned for optimal performance.
+//
+// Type tag uses 1 byte, leaving 7 bytes padding for alignment,
+// then 8 bytes for the value union.
+
+enum VType : u8
+    NULL   = 0    // No value
+    INT    = 1    // 64-bit signed integer
+    FLOAT  = 2    // 64-bit floating point
+    BOOL   = 3    // Boolean (stored as int_val: 0 or 1)
+    STRING = 4    // String (stored as index into string table)
+    SLOT   = 5    // Variable slot reference (compile-time resolved)
+end
+
+struct VcsValue
+    type     : VType        // 1 byte  - value type tag
+    _pad     : u8[7]        // 7 bytes - alignment padding
+    union                   // 8 bytes - value storage
+        int_val    : i64    // INT, BOOL (0/1), SLOT (register index)
+        float_val  : f64    // FLOAT
+        string_id  : u32    // STRING (index into string table)
+    end
+
+    // -------------------------------------------------------------------------
+    // Factory Methods (inline, no allocation)
+    // -------------------------------------------------------------------------
+
+    static function Null() -> VcsValue
+        return VcsValue { type = NULL, int_val = 0 }
+    end
+
+    static function Int(v: i64) -> VcsValue
+        return VcsValue { type = INT, int_val = v }
+    end
+
+    static function Float(v: f64) -> VcsValue
+        return VcsValue { type = FLOAT, float_val = v }
+    end
+
+    static function Bool(v: bool) -> VcsValue
+        return VcsValue { type = BOOL, int_val = v ? 1 : 0 }
+    end
+
+    static function String(id: u32) -> VcsValue
+        return VcsValue { type = STRING, string_id = id }
+    end
+
+    static function Slot(idx: u16) -> VcsValue
+        return VcsValue { type = SLOT, int_val = idx }
+    end
+
+    // -------------------------------------------------------------------------
+    // Conversion Methods (inline, no allocation)
+    // -------------------------------------------------------------------------
+
+    function as_int() -> i64
+        switch this.type
+            case INT:   return this.int_val
+            case FLOAT: return (i64)this.float_val
+            case BOOL:  return this.int_val
+            default:    return 0
+        end
+    end
+
+    function as_float() -> f64
+        switch this.type
+            case FLOAT: return this.float_val
+            case INT:   return (f64)this.int_val
+            case BOOL:  return (f64)this.int_val
+            default:    return 0.0
+        end
+    end
+
+    function as_bool() -> bool
+        switch this.type
+            case BOOL:  return this.int_val != 0
+            case INT:   return this.int_val != 0
+            case FLOAT: return this.float_val != 0.0
+            default:    return false
+        end
+    end
+
+    function is_null() -> bool
+        return this.type == NULL
+    end
+
+    function is_slot() -> bool
+        return this.type == SLOT
+    end
+
+    function slot_index() -> u16
+        return (u16)this.int_val
+    end
+
+    function is_truthy() -> bool
+        switch this.type
+            case NULL:   return false
+            case BOOL:   return this.int_val != 0
+            case INT:    return this.int_val != 0
+            case FLOAT:  return this.float_val != 0.0
+            case STRING: return true
+            case SLOT:   return true
+            default:     return false
+        end
+    end
+end
+
+
+// ============================================================================
+// SECTION 3: VcsArgs (REUSABLE PARAMETER BUFFER)
+// ============================================================================
+//
+// A fixed-size buffer for passing parameters to module operations.
+// One buffer per context, cleared and reused for each instruction.
+// Never allocates during execution.
+
+struct VcsArgs
+    values : VcsValue[MAX_PARAMS]   // Fixed parameter storage
+    count  : u8                      // Current number of parameters
+
+    // -------------------------------------------------------------------------
+    // Buffer Operations
+    // -------------------------------------------------------------------------
+
+    function clear()
+        this.count = 0
+    end
+
+    function add(v: VcsValue)
+        if this.count < MAX_PARAMS
+            this.values[this.count] = v
+            this.count = this.count + 1
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Parameter Access (with defaults for missing params)
+    // -------------------------------------------------------------------------
+
+    function get(i: int) -> VcsValue
+        if i < this.count
+            return this.values[i]
+        end
+        return VcsValue.Null()
+    end
+
+    function int(i: int, default: i64 = 0) -> i64
+        if i < this.count
+            return this.values[i].as_int()
+        end
+        return default
+    end
+
+    function float(i: int, default: f64 = 0.0) -> f64
+        if i < this.count
+            return this.values[i].as_float()
+        end
+        return default
+    end
+
+    function bool(i: int, default: bool = false) -> bool
+        if i < this.count
+            return this.values[i].as_bool()
+        end
+        return default
+    end
+
+    function string(i: int, strings: StringTable*, default: string = "") -> string
+        if i < this.count and this.values[i].type == STRING
+            return strings.get(this.values[i].string_id)
+        end
+        return default
+    end
+end
+
+
+// ============================================================================
+// SECTION 4: INSTRUCTION (8 BYTES, CACHE-FRIENDLY)
+// ============================================================================
+//
+// A single bytecode instruction. Parameters are stored separately
+// in a parameter pool for cache efficiency - instructions are read
+// sequentially during execution, parameters only when needed.
+
+struct Instruction
+    module_id     : u8      // Index into module table (0-15)
+    method_id     : u8      // Opcode within module (0-255)
+    param_count   : u8      // Number of parameters (0-8)
+    flags         : u8      // Reserved for future use (breakpoints, etc.)
+    params_offset : u32     // Offset into program's parameter pool
+end
+
+
+// ============================================================================
+// SECTION 5: VcsProgram (COMPILED BYTECODE)
+// ============================================================================
+//
+// A compiled program ready for execution. Immutable after compilation.
+// Multiple contexts can execute the same program concurrently.
+
+struct VcsProgram
+    id           : u16                             // Unique program ID
+    name         : char[32]                        // Debug/display name
+    inst_count   : u16                             // Number of instructions
+    param_count  : u16                             // Total parameters stored
+    in_use       : bool                            // Slot occupied flag
+    instructions : Instruction[MAX_INSTRUCTIONS]   // Instruction array
+    params       : VcsValue[MAX_INSTRUCTIONS * 4]  // Parameter pool
+
+    // -------------------------------------------------------------------------
+    // Parameter Access
+    // -------------------------------------------------------------------------
+
+    function get_params(inst: Instruction) -> VcsValue*
+        return &this.params[inst.params_offset]
+    end
+
+    function reset()
+        this.inst_count = 0
+        this.param_count = 0
+        this.in_use = false
+    end
+end
+
+
+// ============================================================================
+// SECTION 6: STRING TABLE (INTERNED STRINGS)
+// ============================================================================
+//
+// All strings are interned at compile time. Runtime code never allocates
+// strings - it only references them by ID.
+
+struct StringTable
+    strings    : char[MAX_STRINGS][MAX_STRING_LEN]  // String storage
+    lengths    : u16[MAX_STRINGS]                   // String lengths
+    next_id    : u32                                // Next available ID
+
+    function init()
+        this.next_id = 0
+    end
+
+    function intern(s: string) -> u32
+        // Check if already interned (linear scan - only at compile time)
+        for i in 0 .. this.next_id
+            if this.strings[i] == s
+                return i
+            end
+        end
+
+        // Add new string
+        if this.next_id >= MAX_STRINGS
+            return 0  // Return empty string ID on overflow
+        end
+
+        id = this.next_id
+        this.next_id = this.next_id + 1
+        copy_string(this.strings[id], s, MAX_STRING_LEN)
+        this.lengths[id] = length(s)
+        return id
+    end
+
+    function get(id: u32) -> string
+        if id < this.next_id
+            return this.strings[id]
+        end
+        return ""
+    end
+end
+
+
+// ============================================================================
+// SECTION 7: REGISTER FILE (SHARED STATE)
+// ============================================================================
+//
+// Central variable storage shared across ALL execution contexts.
+// This enables real-time communication between stacks for patterns
+// like utility theory AI.
+//
+// Variable names are resolved to slot indices at compile time.
+// Runtime access is O(1) array indexing with no string operations.
+
+struct RegisterFile
+    slots        : VcsValue[MAX_REGISTERS]        // Value storage
+    names        : char[MAX_REGISTERS][32]        // Variable names (debug)
+    name_to_slot : HashMap<string, u16>           // Compile-time lookup
+    next_slot    : u16                            // Next available slot
+
+    // -------------------------------------------------------------------------
+    // Initialization
+    // -------------------------------------------------------------------------
+
+    function init()
+        this.next_slot = 0
+        for i in 0 .. MAX_REGISTERS
+            this.slots[i] = VcsValue.Null()
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Runtime Access (O(1), lock-free for single-threaded)
+    // -------------------------------------------------------------------------
+
+    function get(slot: u16) -> VcsValue
+        if slot < MAX_REGISTERS
+            return this.slots[slot]
+        end
+        return VcsValue.Null()
+    end
+
+    function set(slot: u16, val: VcsValue)
+        if slot < MAX_REGISTERS
+            this.slots[slot] = val
+        end
+    end
+
+    // -------------------------------------------------------------------------
+    // Compile-Time Operations (may use hash map)
+    // -------------------------------------------------------------------------
+
+    function allocate(name: string) -> u16
+        // Check if already allocated
+        if this.name_to_slot.contains(name)
+            return this.name_to_slot.get(name)
+        end
+
+        // Allocate new slot
+        if this.next_slot >= MAX_REGISTERS
+            error("Register file full")
+        end
+
+        slot = this.next_slot
+        this.next_slot = this.next_slot + 1
+        copy_string(this.names[slot], name, 32)
+        this.name_to_slot.set(name, slot)
+        return slot
+    end
+
+    function get_slot(name: string) -> i32
+        if this.name_to_slot.contains(name)
+            return this.name_to_slot.get(name)
+        end
+        return -1  // Not found
+    end
+
+    function clear_values()
+        for i in 0 .. this.next_slot
+            this.slots[i] = VcsValue.Null()
+        end
+    end
+end
+
+
+// ============================================================================
+// SECTION 8: VcsContext (PER-STACK EXECUTION STATE)
+// ============================================================================
+//
+// Each context represents one executing stack. Multiple contexts share
+// the same RegisterFile for real-time variable communication.
+//
+// Contexts have their own:
+//   - Instruction pointer
+//   - Local value stack
+//   - Execution state
+//
+// Contexts share:
+//   - RegisterFile (variables)
+//   - Module table
+//   - String table
+
+enum ContextState : u8
+    IDLE    = 0    // Not loaded or finished
+    RUNNING = 1    // Actively executing
+    PAUSED  = 2    // Temporarily paused
+    STOPPED = 3    // Execution complete
+    ERROR   = 4    // Error state
+end
+
+struct VcsContext
+    id         : u16                     // Context ID
+    program_id : u16                     // Which program is loaded
+    ip         : u16                     // Instruction pointer
+    stack_top  : u8                      // Stack pointer
+    state      : ContextState            // Execution state
+    stack      : VcsValue[MAX_STACK]     // Local value stack
+    args       : VcsArgs                 // Per-context argument buffer
+    error_msg  : char[128]               // Error message buffer
+
+    // Callbacks (optional, set by host)
+    print_fn   : function(string)        // Output callback
+
+    // -------------------------------------------------------------------------
+    // Initialization
+    // -------------------------------------------------------------------------
+
+    function init(ctx_id: u16)
+        this.id = ctx_id
+        this.reset()
+    end
+
+    function reset()
+        this.ip = 0
+        this.stack_top = 0
+        this.state = IDLE
+        this.args.clear()
+    end
+
+    function load(program_id: u16)
+        this.program_id = program_id
+        this.reset()
+    end
+
+    // -------------------------------------------------------------------------
+    // Stack Operations (inline, bounds-checked)
+    // -------------------------------------------------------------------------
+
+    function push(v: VcsValue)
+        if this.stack_top < MAX_STACK
+            this.stack[this.stack_top] = v
+            this.stack_top = this.stack_top + 1
+        end
+    end
+
+    function pop() -> VcsValue
+        if this.stack_top > 0
+            this.stack_top = this.stack_top - 1
+            return this.stack[this.stack_top]
+        end
+        return VcsValue.Null()
+    end
+
+    function peek() -> VcsValue
+        if this.stack_top > 0
+            return this.stack[this.stack_top - 1]
+        end
+        return VcsValue.Null()
+    end
+
+    function peek_n(n: u8) -> VcsValue
+        if n < this.stack_top
+            return this.stack[this.stack_top - 1 - n]
+        end
+        return VcsValue.Null()
+    end
+
+    // -------------------------------------------------------------------------
+    // State Control
+    // -------------------------------------------------------------------------
+
+    function start()
+        this.state = RUNNING
+    end
+
+    function pause()
+        this.state = PAUSED
+    end
+
+    function stop()
+        this.state = STOPPED
+    end
+
+    function set_error(msg: string)
+        copy_string(this.error_msg, msg, 128)
+        this.state = ERROR
+    end
+
+    function is_running() -> bool
+        return this.state == RUNNING
+    end
+
+    function is_complete() -> bool
+        return this.state == STOPPED or this.state == ERROR
+    end
+end
+
+
+// ============================================================================
+// SECTION 9: MODULE INTERFACE
+// ============================================================================
+//
+// Modules provide operations (opcodes) to the interpreter.
+// Each module has a unique ID and implements the eval function.
+//
+// Modules are registered statically at engine initialization - no reflection.
+
+interface IModule
+    // Evaluate an operation
+    // Returns: Result value (may be pushed to stack by caller or ignored)
+    function eval(
+        method_id : u8,
+        args      : VcsArgs*,
+        ctx       : VcsContext*,
+        regs      : RegisterFile*,
+        strings   : StringTable*
+    ) -> VcsValue
+end
+
+
+// ============================================================================
+// SECTION 10: LlmvccOps (MODULE 0 - CORE OPERATIONS)
+// ============================================================================
+//
+// The core module providing Turing-complete operations:
+//   - Control flow (jumps, conditionals, stop)
+//   - Stack manipulation (push, pop, dup, swap)
+//   - Variable access (store, load)
+//   - Math operations (+, -, *, /, %, pow)
+//   - Comparison operators (==, !=, <, >, <=, >=)
+//   - Logical operators (and, or, not, xor)
+
+module LlmvccOps implements IModule
+
+    function eval(
+        method_id : u8,
+        args      : VcsArgs*,
+        ctx       : VcsContext*,
+        regs      : RegisterFile*,
+        strings   : StringTable*
+    ) -> VcsValue
+
+        switch method_id
+            // =================================================================
+            // CONTROL FLOW (0-6)
+            // =================================================================
+
+            case 0:  // nop - No operation
+                return VcsValue.Null()
+
+            case 1:  // stop - Halt execution
+                ctx.state = STOPPED
+                return VcsValue.Null()
+
+            case 2:  // error - Throw error with message
+                msg = args.string(0, strings, "Error")
+                ctx.set_error(msg)
+                return VcsValue.Null()
+
+            case 3:  // skip(n) - Skip next n instructions
+                n = args.int(0, 1)
+                ctx.ip = ctx.ip + n
+                return VcsValue.Int(n)
+
+            case 4:  // jump(addr) - Unconditional jump
+                addr = args.int(0, 0)
+                ctx.ip = addr - 1  // -1 because ip++ after eval
+                return VcsValue.Int(addr)
+
+            case 5:  // jump_if(addr, cond) - Jump if condition is true
+                addr = args.int(0, 0)
+                cond = args.bool(1, false)
+                if cond
+                    ctx.ip = addr - 1
+                end
+                return VcsValue.Bool(cond)
+
+            case 6:  // jump_if_not(addr, cond) - Jump if condition is false
+                addr = args.int(0, 0)
+                cond = args.bool(1, true)
+                if not cond
+                    ctx.ip = addr - 1
+                end
+                return VcsValue.Bool(not cond)
+
+            // =================================================================
+            // STACK OPERATIONS (7-10)
+            // =================================================================
+
+            case 7:  // push(val) - Push value onto stack
+                val = args.get(0)
+                ctx.push(val)
+                return val
+
+            case 8:  // pop() - Pop and return top of stack
+                return ctx.pop()
+
+            case 9:  // dup() - Duplicate top of stack
+                val = ctx.peek()
+                ctx.push(val)
+                return val
+
+            case 10: // swap() - Swap top two stack values
+                a = ctx.pop()
+                b = ctx.pop()
+                ctx.push(a)
+                ctx.push(b)
+                return VcsValue.Null()
+
+            // =================================================================
+            // VARIABLE OPERATIONS (11-13)
+            // =================================================================
+
+            case 11: // store(slot, val) - Store value in register
+                slot = args.int(0, 0)
+                val = args.get(1)
+                regs.set(slot, val)
+                return val
+
+            case 12: // load(slot) - Load register value onto stack
+                slot = args.int(0, 0)
+                val = regs.get(slot)
+                ctx.push(val)
+                return val
+
+            case 13: // print(val) - Print value to output
+                val = args.get(0)
+                if ctx.print_fn != null
+                    switch val.type
+                        case INT:
+                            ctx.print_fn(to_string(val.as_int()))
+                        case FLOAT:
+                            ctx.print_fn(to_string(val.as_float()))
+                        case BOOL:
+                            ctx.print_fn(val.as_bool() ? "true" : "false")
+                        case STRING:
+                            ctx.print_fn(strings.get(val.string_id))
+                        default:
+                            ctx.print_fn("null")
+                    end
+                end
+                return val
+
+            // =================================================================
+            // MATH OPERATIONS (14-19)
+            // =================================================================
+
+            case 14: // mod(a, b) - Modulus
+                a = args.float(0, 0.0)
+                b = args.float(1, 1.0)
+                if b == 0.0
+                    return VcsValue.Float(0.0)
+                end
+                return VcsValue.Float(a % b)
+
+            case 15: // mul(a, b) - Multiply
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Float(a * b)
+
+            case 16: // div(a, b) - Divide
+                a = args.float(0, 0.0)
+                b = args.float(1, 1.0)
+                if b == 0.0
+                    return VcsValue.Float(0.0)
+                end
+                return VcsValue.Float(a / b)
+
+            case 17: // add(a, b) - Add
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Float(a + b)
+
+            case 18: // sub(a, b) - Subtract
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Float(a - b)
+
+            case 19: // pow(a, b) - Power
+                a = args.float(0, 0.0)
+                b = args.float(1, 1.0)
+                return VcsValue.Float(power(a, b))
+
+            // =================================================================
+            // COMPARISON OPERATIONS (20-25)
+            // =================================================================
+
+            case 20: // eq(a, b) - Equal
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Bool(a == b)
+
+            case 21: // neq(a, b) - Not equal
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Bool(a != b)
+
+            case 22: // gt(a, b) - Greater than
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Bool(a > b)
+
+            case 23: // lt(a, b) - Less than
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Bool(a < b)
+
+            case 24: // gte(a, b) - Greater than or equal
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Bool(a >= b)
+
+            case 25: // lte(a, b) - Less than or equal
+                a = args.float(0, 0.0)
+                b = args.float(1, 0.0)
+                return VcsValue.Bool(a <= b)
+
+            // =================================================================
+            // LOGICAL OPERATIONS (26-29)
+            // =================================================================
+
+            case 26: // and(a, b) - Logical AND
+                a = args.bool(0, false)
+                b = args.bool(1, false)
+                return VcsValue.Bool(a and b)
+
+            case 27: // or(a, b) - Logical OR
+                a = args.bool(0, false)
+                b = args.bool(1, false)
+                return VcsValue.Bool(a or b)
+
+            case 28: // not(a) - Logical NOT
+                a = args.bool(0, false)
+                return VcsValue.Bool(not a)
+
+            case 29: // xor(a, b) - Logical XOR
+                a = args.bool(0, false)
+                b = args.bool(1, false)
+                return VcsValue.Bool(a xor b)
+
+            // =================================================================
+            // DEFAULT
+            // =================================================================
+
+            default:
+                return VcsValue.Null()
+        end
+    end
+end
+
+
+// ============================================================================
+// SECTION 11: COMPILER (STRING/STREAM PARSER)
+// ============================================================================
+//
+// Compiles .vcs source code into bytecode programs.
+// Resolves variable names to register slots at compile time.
+// Supports string and stream input.
+
+struct VcsCompiler
+    registers : RegisterFile*    // Shared register file
+    strings   : StringTable*     // Shared string table
+
+    // -------------------------------------------------------------------------
+    // Public Compilation Methods
+    // -------------------------------------------------------------------------
+
+    function compile_string(source: string, program: VcsProgram*) -> bool
+        lines = split_lines(source)
+        return this.compile_lines(lines, program)
+    end
+
+    function compile_stream(stream: InputStream, program: VcsProgram*) -> bool
+        lines = []
+        while not stream.eof()
+            line = stream.read_line()
+            lines.append(line)
+        end
+        return this.compile_lines(lines, program)
+    end
+
+    // -------------------------------------------------------------------------
+    // Core Compilation
+    // -------------------------------------------------------------------------
+
+    function compile_lines(lines: string[], program: VcsProgram*) -> bool
+        program.reset()
+
+        for line in lines
+            line = trim(line)
+
+            // Skip empty lines and comments
+            if length(line) == 0
+                continue
+            end
+            if starts_with(line, "//")
+                continue
+            end
+            if starts_with(line, "#")
+                continue
+            end
+
+            // Strip inline comments
+            comment_pos = index_of(line, "//")
+            if comment_pos >= 0
+                line = substring(line, 0, comment_pos)
+                line = trim(line)
+            end
+
+            if length(line) == 0
+                continue
+            end
+
+            // Parse instruction
+            inst = this.parse_instruction(line, program)
+            if inst.module_id == 255  // Parse error marker
+                return false
+            end
+
+            // Add to program
+            if program.inst_count >= MAX_INSTRUCTIONS
+                return false  // Program too large
+            end
+            program.instructions[program.inst_count] = inst
+            program.inst_count = program.inst_count + 1
+        end
+
+        program.in_use = true
+        return true
+    end
+
+    // -------------------------------------------------------------------------
+    // Instruction Parsing
+    // -------------------------------------------------------------------------
+
+    function parse_instruction(line: string, program: VcsProgram*) -> Instruction
+        // Format: "moduleId.methodId(param1, param2, ...)"
+
+        // Find separators
+        dot_pos = index_of(line, ".")
+        paren_open = index_of(line, "(")
+        paren_close = last_index_of(line, ")")
+
+        // Validate format
+        if dot_pos < 0 or paren_open < 0 or paren_close < 0
+            return Instruction { module_id = 255 }  // Error marker
+        end
+        if dot_pos >= paren_open
+            return Instruction { module_id = 255 }
+        end
+
+        // Parse module and method IDs
+        module_str = substring(line, 0, dot_pos)
+        method_str = substring(line, dot_pos + 1, paren_open)
+        params_str = substring(line, paren_open + 1, paren_close)
+
+        module_id = parse_int(trim(module_str))
+        method_id = parse_int(trim(method_str))
+
+        // Create instruction
+        inst = Instruction {
+            module_id     = module_id,
+            method_id     = method_id,
+            param_count   = 0,
+            flags         = 0,
+            params_offset = program.param_count
+        }
+
+        // Parse parameters
+        params_str = trim(params_str)
+        if length(params_str) > 0
+            params = this.split_params(params_str)
+            for param in params
+                val = this.parse_value(trim(param), module_id, method_id, inst.param_count)
+                
+                // Store parameter
+                if program.param_count < MAX_INSTRUCTIONS * 4
+                    program.params[program.param_count] = val
+                    program.param_count = program.param_count + 1
+                    inst.param_count = inst.param_count + 1
+                end
+            end
+        end
+
+        return inst
+    end
+
+    // -------------------------------------------------------------------------
+    // Parameter Parsing
+    // -------------------------------------------------------------------------
+
+    function split_params(params_str: string) -> string[]
+        // Split by comma, respecting quotes
+        result = []
+        current = ""
+        in_quotes = false
+        quote_char = '\0'
+
+        for i in 0 .. length(params_str)
+            c = params_str[i]
+
+            if not in_quotes and (c == '"' or c == '\'')
+                in_quotes = true
+                quote_char = c
+                current = current + c
+            else if in_quotes and c == quote_char
+                in_quotes = false
+                current = current + c
+            else if not in_quotes and c == ','
+                result.append(current)
+                current = ""
+            else
+                current = current + c
+            end
+        end
+
+        // Add last parameter
+        if length(current) > 0
+            result.append(current)
+        end
+
+        return result
+    end
+
+    function parse_value(token: string, module_id: u8, method_id: u8, param_idx: u8) -> VcsValue
+        token = trim(token)
+
+        // Variable reference: $varName
+        if starts_with(token, "$")
+            name = substring(token, 1, length(token))
+            slot = this.registers.allocate(name)
+            return VcsValue.Slot(slot)
+        end
+
+        // Quoted string: "text" or 'text'
+        if starts_with(token, '"') and ends_with(token, '"')
+            str = substring(token, 1, length(token) - 1)
+            // Check if this is a variable name parameter (store/load first param)
+            if this.is_varname_param(module_id, method_id, param_idx)
+                slot = this.registers.allocate(str)
+                return VcsValue.Int(slot)  // Return slot index as int
+            end
+            id = this.strings.intern(str)
+            return VcsValue.String(id)
+        end
+        if starts_with(token, "'") and ends_with(token, "'")
+            str = substring(token, 1, length(token) - 1)
+            if this.is_varname_param(module_id, method_id, param_idx)
+                slot = this.registers.allocate(str)
+                return VcsValue.Int(slot)
+            end
+            id = this.strings.intern(str)
+            return VcsValue.String(id)
+        end
+
+        // Boolean
+        if token == "true"
+            return VcsValue.Bool(true)
+        end
+        if token == "false"
+            return VcsValue.Bool(false)
+        end
+
+        // Number
+        if contains(token, ".")
+            return VcsValue.Float(parse_float(token))
+        end
+        return VcsValue.Int(parse_int(token))
+    end
+
+    function is_varname_param(module_id: u8, method_id: u8, param_idx: u8) -> bool
+        // First parameter of store (11) and load (12) is a variable name
+        if module_id == 0 and param_idx == 0
+            if method_id == 11 or method_id == 12
+                return true
+            end
+        end
+        return false
+    end
+end
+
+
+// ============================================================================
+// SECTION 12: VcsEngine (MULTI-STACK ORCHESTRATOR)
+// ============================================================================
+//
+// The main engine managing multiple execution contexts with shared state.
+//
+// Features:
+//   - Program loading from string/stream
+//   - Context pool management
+//   - Round-robin stepping for concurrent execution
+//   - External variable access for host integration
+
+struct VcsEngine
+    registers : RegisterFile                  // Shared variable storage
+    strings   : StringTable                   // Interned string storage
+    modules   : IModule*[MAX_MODULES]         // Static module table
+    programs  : VcsProgram[MAX_PROGRAMS]      // Compiled program cache
+    contexts  : VcsContext[MAX_CONTEXTS]      // Execution context pool
+    compiler  : VcsCompiler                   // Shared compiler instance
+
+    // -------------------------------------------------------------------------
+    // Initialization
+    // -------------------------------------------------------------------------
+
+    function init()
+        // Initialize shared state
+        this.registers.init()
+        this.strings.init()
+
+        // Set up compiler references
+        this.compiler.registers = &this.registers
+        this.compiler.strings = &this.strings
+
+        // Register modules statically (NO REFLECTION)
+        this.modules[0] = &LlmvccOps{}
+        // modules[1] = &GraphicsOps{}    // Add as needed
+        // modules[2] = &SortingOps{}     // Add as needed
+        // ... up to MAX_MODULES
+
+        // Initialize pools
+        for i in 0 .. MAX_PROGRAMS
+            this.programs[i].in_use = false
+        end
+        for i in 0 .. MAX_CONTEXTS
+            this.contexts[i].init(i)
+        end
+    end
+
+    // =========================================================================
+    // PROGRAM LOADING
+    // =========================================================================
+
+    function load_string(source: string, name: string = "program") -> i32
+        slot = this.find_free_program_slot()
+        if slot < 0
+            return -1  // No free slots
+        end
+
+        this.programs[slot].id = slot
+        copy_string(this.programs[slot].name, name, 32)
+
+        if not this.compiler.compile_string(source, &this.programs[slot])
+            return -1  // Compilation failed
+        end
+
+        return slot
+    end
+
+    function load_stream(stream: InputStream, name: string = "stream") -> i32
+        slot = this.find_free_program_slot()
+        if slot < 0
+            return -1
+        end
+
+        this.programs[slot].id = slot
+        copy_string(this.programs[slot].name, name, 32)
+
+        if not this.compiler.compile_stream(stream, &this.programs[slot])
+            return -1
+        end
+
+        return slot
+    end
+
+    function unload_program(program_id: i32)
+        if program_id >= 0 and program_id < MAX_PROGRAMS
+            this.programs[program_id].in_use = false
+        end
+    end
+
+    // =========================================================================
+    // CONTEXT MANAGEMENT
+    // =========================================================================
+
+    function create_context(program_id: u16) -> i32
+        slot = this.find_free_context_slot()
+        if slot < 0
+            return -1  // No free slots
+        end
+
+        this.contexts[slot].init(slot)
+        this.contexts[slot].load(program_id)
+        return slot
+    end
+
+    function destroy_context(ctx_id: i32)
+        if ctx_id >= 0 and ctx_id < MAX_CONTEXTS
+            this.contexts[ctx_id].state = IDLE
+        end
+    end
+
+    function start(ctx_id: u16)
+        if ctx_id < MAX_CONTEXTS
+            this.contexts[ctx_id].start()
+        end
+    end
+
+    function pause(ctx_id: u16)
+        if ctx_id < MAX_CONTEXTS
+            this.contexts[ctx_id].pause()
+        end
+    end
+
+    function stop(ctx_id: u16)
+        if ctx_id < MAX_CONTEXTS
+            this.contexts[ctx_id].stop()
+        end
+    end
+
+    function reset(ctx_id: u16)
+        if ctx_id < MAX_CONTEXTS
+            this.contexts[ctx_id].reset()
+        end
+    end
+
+    function get_state(ctx_id: u16) -> ContextState
+        if ctx_id < MAX_CONTEXTS
+            return this.contexts[ctx_id].state
+        end
+        return IDLE
+    end
+
+    // =========================================================================
+    // EXECUTION
+    // =========================================================================
+
+    // Step a single context by N instructions
+    // Returns: Number of instructions actually executed
+    function step(ctx_id: u16, count: u16 = 1) -> u16
+        if ctx_id >= MAX_CONTEXTS
+            return 0
+        end
+
+        ctx = &this.contexts[ctx_id]
+        if ctx.state != RUNNING
+            return 0
+        end
+
+        program = &this.programs[ctx.program_id]
+        executed = 0
+
+        while executed < count and ctx.state == RUNNING and ctx.ip < program.inst_count
+            // Fetch instruction
+            inst = program.instructions[ctx.ip]
+            params = program.get_params(inst)
+
+            // Resolve parameters (SLOT -> actual value from registers)
+            ctx.args.clear()
+            for i in 0 .. inst.param_count
+                p = params[i]
+                if p.is_slot()
+                    // Resolve variable reference to current value
+                    ctx.args.add(this.registers.get(p.slot_index()))
+                else
+                    ctx.args.add(p)
+                end
+            end
+
+            // Dispatch to module
+            module = this.modules[inst.module_id]
+            if module != null
+                result = module.eval(
+                    inst.method_id,
+                    &ctx.args,
+                    ctx,
+                    &this.registers,
+                    &this.strings
+                )
+                // Note: Result is available but not automatically pushed.
+                // Modules decide what to do with results.
+            end
+
+            // Advance instruction pointer
+            ctx.ip = ctx.ip + 1
+            executed = executed + 1
+        end
+
+        // Check for program completion
+        if ctx.ip >= program.inst_count
+            ctx.state = STOPPED
+        end
+
+        return executed
+    end
+
+    // Step ALL running contexts by N instructions each (round-robin)
+    function step_all(count: u16 = 1)
+        for i in 0 .. MAX_CONTEXTS
+            if this.contexts[i].state == RUNNING
+                this.step(i, count)
+            end
+        end
+    end
+
+    // Run a single context to completion (blocking)
+    function run(ctx_id: u16)
+        while this.contexts[ctx_id].state == RUNNING
+            this.step(ctx_id, 100)
+        end
+    end
+
+    // Run all contexts until all complete (blocking)
+    function run_all()
+        running = true
+        while running
+            running = false
+            for i in 0 .. MAX_CONTEXTS
+                if this.contexts[i].state == RUNNING
+                    this.step(i, 100)
+                    running = true
+                end
+            end
+        end
+    end
+
+    // =========================================================================
+    // VARIABLE ACCESS (FOR HOST INTEGRATION)
+    // =========================================================================
+
+    function get_var(name: string) -> VcsValue
+        slot = this.registers.get_slot(name)
+        if slot >= 0
+            return this.registers.get(slot)
+        end
+        return VcsValue.Null()
+    end
+
+    function set_var(name: string, val: VcsValue)
+        slot = this.registers.get_slot(name)
+        if slot >= 0
+            this.registers.set(slot, val)
+        end
+    end
+
+    function set_int(name: string, val: i64)
+        this.set_var(name, VcsValue.Int(val))
+    end
+
+    function set_float(name: string, val: f64)
+        this.set_var(name, VcsValue.Float(val))
+    end
+
+    function set_bool(name: string, val: bool)
+        this.set_var(name, VcsValue.Bool(val))
+    end
+
+    function get_int(name: string, default: i64 = 0) -> i64
+        return this.get_var(name).as_int()
+    end
+
+    function get_float(name: string, default: f64 = 0.0) -> f64
+        return this.get_var(name).as_float()
+    end
+
+    function get_bool(name: string, default: bool = false) -> bool
+        return this.get_var(name).as_bool()
+    end
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    function find_free_program_slot() -> i32
+        for i in 0 .. MAX_PROGRAMS
+            if not this.programs[i].in_use
+                return i
+            end
+        end
+        return -1
+    end
+
+    function find_free_context_slot() -> i32
+        for i in 0 .. MAX_CONTEXTS
+            state = this.contexts[i].state
+            if state == IDLE or state == STOPPED
+                return i
+            end
+        end
+        return -1
+    end
+
+    function get_running_count() -> u16
+        count = 0
+        for i in 0 .. MAX_CONTEXTS
+            if this.contexts[i].state == RUNNING
+                count = count + 1
+            end
+        end
+        return count
+    end
+end
+
+
+// ============================================================================
+// SECTION 13: EXAMPLE USAGE
+// ============================================================================
+
+// -----------------------------------------------------------------------------
+// Example 1: Single Stack Execution
+// -----------------------------------------------------------------------------
+
+/*
+engine = VcsEngine{}
+engine.init()
+
+source = """
+0.11("counter", 0)       // store counter = 0
+0.17($counter, 1)        // add counter + 1  -> result on stack
+0.11("counter", $result) // store result back (NOTE: need to pop stack)
+0.23($counter, 10)       // compare counter < 10
+0.5(1, $result)          // jump to line 1 if true
+0.13($counter)           // print counter
+0.1()                    // stop
+"""
+
+prog_id = engine.load_string(source, "counter")
+ctx_id = engine.create_context(prog_id)
+engine.start(ctx_id)
+engine.run(ctx_id)
+
+print(engine.get_int("counter"))  // Output: 10
+*/
+
+// -----------------------------------------------------------------------------
+// Example 2: Multi-Stack with Shared Variables (Utility Theory AI)
+// -----------------------------------------------------------------------------
+
+/*
+engine = VcsEngine{}
+engine.init()
+
+// Game state stack - continuously updates world variables
+game_src = """
+// Game loop - updates player and enemy state
+0.11("player_hp", 100)
+0.11("enemy_dist", 50)
+0.11("ammo", 30)
+// ... in real game, this would loop and update based on game events
+0.1()
+"""
+
+// AI evaluation stack - reads state, writes decisions
+ai_src = """
+// Simple utility AI
+// Check if health is low
+0.23($player_hp, 30)        // hp < 30?
+0.5(7, $result)             // if true, jump to HEAL decision
+
+// Check if enemy is close
+0.23($enemy_dist, 20)       // dist < 20?
+0.5(11, $result)            // if true, jump to FLEE decision
+
+// Default: ATTACK
+0.11("action", 1)           // action = ATTACK (1)
+0.4(13)                     // jump to end
+
+// HEAL decision
+0.11("action", 2)           // action = HEAL (2)
+0.4(13)                     // jump to end
+
+// FLEE decision  
+0.11("action", 3)           // action = FLEE (3)
+
+// End
+0.1()
+"""
+
+// Load programs
+game_prog = engine.load_string(game_src, "game_state")
+ai_prog = engine.load_string(ai_src, "ai_eval")
+
+// Create and start contexts
+game_ctx = engine.create_context(game_prog)
+ai_ctx = engine.create_context(ai_prog)
+
+engine.start(game_ctx)
+engine.start(ai_ctx)
+
+// Game loop - both stacks share variables in real-time
+while game_running
+    engine.step_all(10)  // Each stack executes 10 instructions
+    
+    // Host code can read AI decision
+    action = engine.get_int("action")
+    switch action
+        case 1: perform_attack()
+        case 2: perform_heal()
+        case 3: perform_flee()
+    end
+    
+    // Host code can update game state
+    engine.set_int("player_hp", current_health)
+    engine.set_int("enemy_dist", calculate_distance())
+end
+*/
+
+// -----------------------------------------------------------------------------
+// Example 3: Loading from Stream
+// -----------------------------------------------------------------------------
+
+/*
+engine = VcsEngine{}
+engine.init()
+
+// Open file as stream
+stream = open_file("scripts/ai_behavior.vcs")
+prog_id = engine.load_stream(stream, "ai_behavior")
+close_file(stream)
+
+if prog_id >= 0
+    ctx_id = engine.create_context(prog_id)
+    engine.start(ctx_id)
+    engine.run(ctx_id)
+end
+*/
+
+
+// ============================================================================
+// SECTION 14: OPCODE REFERENCE
+// ============================================================================
+//
+// Module 0: LlmvccOps (Core Operations)
+// 
+// ID | Name        | Params              | Description
+// ---|-------------|---------------------|------------------------------------
+// 0  | nop         | -                   | No operation
+// 1  | stop        | -                   | Halt execution
+// 2  | error       | msg                 | Throw error with message
+// 3  | skip        | n                   | Skip next n instructions
+// 4  | jump        | addr                | Unconditional jump to address
+// 5  | jump_if     | addr, cond          | Jump if condition is true
+// 6  | jump_if_not | addr, cond          | Jump if condition is false
+// 7  | push        | val                 | Push value onto stack
+// 8  | pop         | -                   | Pop top of stack
+// 9  | dup         | -                   | Duplicate top of stack
+// 10 | swap        | -                   | Swap top two stack values
+// 11 | store       | slot/name, val      | Store value in register
+// 12 | load        | slot/name           | Load register onto stack
+// 13 | print       | val                 | Print value to output
+// 14 | mod         | a, b                | a % b (modulus)
+// 15 | mul         | a, b                | a * b (multiply)
+// 16 | div         | a, b                | a / b (divide)
+// 17 | add         | a, b                | a + b (add)
+// 18 | sub         | a, b                | a - b (subtract)
+// 19 | pow         | a, b                | a ^ b (power)
+// 20 | eq          | a, b                | a == b (equal)
+// 21 | neq         | a, b                | a != b (not equal)
+// 22 | gt          | a, b                | a > b (greater than)
+// 23 | lt          | a, b                | a < b (less than)
+// 24 | gte         | a, b                | a >= b (greater or equal)
+// 25 | lte         | a, b                | a <= b (less or equal)
+// 26 | and         | a, b                | a && b (logical and)
+// 27 | or          | a, b                | a || b (logical or)
+// 28 | not         | a                   | !a (logical not)
+// 29 | xor         | a, b                | a xor b (exclusive or)
+//
+// ============================================================================
+
+
+// ============================================================================
+// SECTION 15: MEMORY LAYOUT
+// ============================================================================
+//
+// Total pre-allocated memory: ~2.5 MB
+//
+// VcsEngine breakdown:
+// ├── RegisterFile:         ~20 KB
+// │   ├── slots:            16 KB  (1024 * 16 bytes)
+// │   └── names:            32 KB  (1024 * 32 bytes)
+// │
+// ├── StringTable:          ~260 KB
+// │   ├── strings:          256 KB (1024 * 256 bytes)
+// │   └── lengths:          2 KB   (1024 * 2 bytes)
+// │
+// ├── Modules:              128 B  (16 * 8 byte pointers)
+// │
+// ├── Programs[32]:         ~2 MB
+// │   └── Each Program:     ~64 KB
+// │       ├── instructions: 32 KB  (4096 * 8 bytes)
+// │       └── params:       ~32 KB (4096 * 4 * 16 bytes typical)
+// │
+// └── Contexts[32]:         ~270 KB
+//     └── Each Context:     ~8.5 KB
+//         ├── stack:        4 KB   (256 * 16 bytes)
+//         └── args:         144 B  (8 * 16 + overhead)
+//
+// ============================================================================
+
+
+// ============================================================================
+// END OF SPECIFICATION
+// ============================================================================

@@ -1,0 +1,29 @@
+init_window | Initializes a graphics window. Parameters: width, height, title.
+
+close_window | Closes the graphics window and releases resources.
+
+clear_screen | Clears the screen with a background color. Parameters: r, g, b.
+
+draw_rect | Draws a filled rectangle. Parameters: x, y, width, height, r, g, b.
+
+draw_circle | Draws a filled circle. Parameters: centerX, centerY, radius, r, g, b.
+
+draw_text | Draws text on screen. Parameters: text, x, y, size, r, g, b.
+
+present | Presents the rendered frame to the screen (double buffering swap).
+
+poll_events | Polls for input events and updates key states. Returns true if window should stay open.
+
+is_key_down | Checks if a key is currently pressed. Parameters: keyCode. Common keys: 38=Up, 40=Down, 87=W, 83=S, 27=Escape.
+
+get_time | Gets elapsed time in milliseconds since window was created.
+
+delay | Delays execution for specified milliseconds. Parameters: ms.
+
+random_int | Generates a random integer in range. Parameters: min, max.
+
+random_float | Generates a random float in range. Parameters: min, max.
+
+set_game_state | Sets a game state variable. Parameters: name, value.
+
+get_game_state | Gets a game state variable. Parameters: name.

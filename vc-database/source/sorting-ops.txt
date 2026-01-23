@@ -1,0 +1,11 @@
+bubble_sort | Sorts an array by repeatedly swapping adjacent elements if they are in wrong order. Parameters: array.
+
+selection_sort | Sorts an array by repeatedly finding the minimum element and placing it at the beginning. Parameters: array.
+
+insertion_sort | Sorts an array by building the sorted portion one element at a time. Parameters: array.
+
+merge_sort | Sorts an array using divide-and-conquer by splitting, sorting halves, and merging. Parameters: array.
+
+quick_sort | Sorts an array using divide-and-conquer with a pivot element for partitioning. Parameters: array.
+
+heap_sort | Sorts an array by building a heap and repeatedly extracting the maximum element. Parameters: array.

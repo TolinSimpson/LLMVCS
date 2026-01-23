@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build vector databases
+        run: python vc-database/vcdb.py
+
+      - name: Demo search
+        run: python vc-database/vcdb.py --demo-search add numbers
+
+      - name: Python tests
+        run: python -m unittest discover -s vc-database -p "test_*.py" -v
+
+      - name: JS interpreter smoke test
+        run: node vcs-js/smoke-test.js
+
+      - name: JS tests
+        run: node vcs-js/tests/test_vcs.js
+

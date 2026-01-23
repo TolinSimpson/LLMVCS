@@ -1,0 +1,52 @@
+// Turing Complete Stack Interpreter Example
+// Module IDs: 0=math, 1=comparison, 2=logic, 3=llmvcc
+// 
+// LLMVCC operations (module 3):
+//   0=nop, 1=stop, 2=error, 3=skip, 4=jump,
+//   5=jump_if, 6=jump_if_not, 7=push, 8=pop,
+//   9=dup, 10=swap, 11=store, 12=load, 13=print
+
+// Print welcome message
+3.13("Starting calculation...")
+
+// Store initial value: x = 10
+3.11("x", 10)
+
+// Compute: x * 2 + 5
+3.12("x")
+0.1($x, 2)
+0.3(20, 5)
+
+// Store result: result = 25
+3.11("result", 25)
+
+// Print result
+3.13("Result: 25")
+
+// Conditional jump example
+// If result > 20, skip the error
+1.2(25, 20)
+3.5(14, true)
+
+// This would error but gets skipped
+// 3.2("Should not reach here")
+
+// Loop example: count down from 3
+3.11("counter", 3)
+
+// [15] Loop start - print counter
+3.13("Countdown...")
+
+// Decrement counter
+0.4($counter, 1)
+3.11("counter", 2)
+
+// Check if counter > 0
+1.2($counter, 0)
+
+// If counter > 0, jump back to loop (instruction 15)
+// 3.5(15, true)
+
+// Done
+3.13("Done!")
+3.1()

@@ -1,0 +1,1398 @@
+// 2048 (VCS-JS)
+// Controls:
+// - Arrow keys: Move tiles
+// - R: Restart
+// - Esc: Quit
+//
+// Labels are supported: define with `:name` and jump with `@name`.
+//
+// Modules:
+// - 0 = llmvcc-ops
+// - 2 = graphics-ops (window, draw, input polling, randomness, timing)
+//
+// Board is stored in 16 variables: c00..c03, c10..c13, c20..c23, c30..c33 (0 = empty).
+
+2.0(500, 650, "2048 - VCS-JS")                       // init_window(width, height, title)
+
+::reset
+// ---- Reset game state ----
+0.11("score", 0)                                     // score = 0
+0.11("moved", false)                                 // moved = false
+0.11("gameOver", false)                              // gameOver = false
+0.11("win", false)                                   // win = false
+0.11("spawn_phase", 0)                               // spawn_phase = 0 (used to spawn 2 tiles on reset)
+
+// Previous key states for edge-triggered input
+0.11("prevLeft", false)                              // prevLeft = false
+0.11("prevRight", false)                             // prevRight = false
+0.11("prevUp", false)                                // prevUp = false
+0.11("prevDown", false)                              // prevDown = false
+0.11("prevR", false)                                 // prevR = false
+0.11("prevEsc", false)                               // prevEsc = false
+
+// Clear board cells to 0
+0.11("c00", 0)                                       // c00 = 0
+0.11("c01", 0)                                       // c01 = 0
+0.11("c02", 0)                                       // c02 = 0
+0.11("c03", 0)                                       // c03 = 0
+0.11("c10", 0)                                       // c10 = 0
+0.11("c11", 0)                                       // c11 = 0
+0.11("c12", 0)                                       // c12 = 0
+0.11("c13", 0)                                       // c13 = 0
+0.11("c20", 0)                                       // c20 = 0
+0.11("c21", 0)                                       // c21 = 0
+0.11("c22", 0)                                       // c22 = 0
+0.11("c23", 0)                                       // c23 = 0
+0.11("c30", 0)                                       // c30 = 0
+0.11("c31", 0)                                       // c31 = 0
+0.11("c32", 0)                                       // c32 = 0
+0.11("c33", 0)                                       // c33 = 0
+
+0.4(@spawn)                                          // jump to spawn (will spawn twice due to spawn_phase)
+
+::loop
+// ---- Poll events; exit if window closed ----
+2.7()                                                // poll_events() -> $result (true = keep running)
+0.6(@exit, $result)                                  // jump_if_not(exit, keepRunning)
+
+// ---- Esc quit (edge triggered) ----
+2.8(27)                                               // is_key_down(27=Esc)
+0.11("kEsc", $result)                                 // kEsc = isDown
+0.28($prevEsc)                                        // not(prevEsc)
+0.26($kEsc, $result)                                  // and(kEsc, !prevEsc) -> triggerEsc
+0.11("trEsc", $result)                                // trEsc = triggerEsc
+0.11("prevEsc", $kEsc)                                // prevEsc = kEsc
+0.5(@exit, $trEsc)                                    // jump_if(exit, trEsc)
+
+// ---- Restart (R=82) (edge triggered) ----
+2.8(82)                                               // is_key_down(82=R)
+0.11("kR", $result)                                   // kR = isDown
+0.28($prevR)                                          // not(prevR)
+0.26($kR, $result)                                    // and(kR, !prevR) -> triggerR
+0.11("trR", $result)                                  // trR = triggerR
+0.11("prevR", $kR)                                    // prevR = kR
+0.5(@reset, $trR)                                     // jump_if(reset, trR)
+
+// If game over, ignore movement keys (still allow R / Esc)
+0.5(@render, $gameOver)                               // if gameOver => render only
+
+// ---- Movement keys (edge triggered) ----
+// Left (37)
+2.8(37)                                               // is_key_down(37=Left)
+0.11("kLeft", $result)                                // kLeft = isDown
+0.28($prevLeft)                                       // not(prevLeft)
+0.26($kLeft, $result)                                 // and(kLeft, !prevLeft) -> trLeft
+0.11("trLeft", $result)                               // trLeft = trLeft
+0.11("prevLeft", $kLeft)                              // prevLeft = kLeft
+0.5(@move_left, $trLeft)                              // if trLeft => move_left
+
+// Right (39)
+2.8(39)                                               // is_key_down(39=Right)
+0.11("kRight", $result)                               // kRight = isDown
+0.28($prevRight)                                      // not(prevRight)
+0.26($kRight, $result)                                // and(kRight, !prevRight) -> trRight
+0.11("trRight", $result)                              // trRight = trRight
+0.11("prevRight", $kRight)                            // prevRight = kRight
+0.5(@move_right, $trRight)                            // if trRight => move_right
+
+// Up (38)
+2.8(38)                                               // is_key_down(38=Up)
+0.11("kUp", $result)                                  // kUp = isDown
+0.28($prevUp)                                         // not(prevUp)
+0.26($kUp, $result)                                   // and(kUp, !prevUp) -> trUp
+0.11("trUp", $result)                                 // trUp = trUp
+0.11("prevUp", $kUp)                                  // prevUp = kUp
+0.5(@move_up, $trUp)                                  // if trUp => move_up
+
+// Down (40)
+2.8(40)                                               // is_key_down(40=Down)
+0.11("kDown", $result)                                // kDown = isDown
+0.28($prevDown)                                       // not(prevDown)
+0.26($kDown, $result)                                 // and(kDown, !prevDown) -> trDown
+0.11("trDown", $result)                               // trDown = trDown
+0.11("prevDown", $kDown)                              // prevDown = kDown
+0.5(@move_down, $trDown)                              // if trDown => move_down
+
+0.4(@render)                                          // no move triggered => render
+
+// =========================
+// Move implementations
+// =========================
+
+::move_left
+0.11("moved", false)                                  // moved = false
+
+// Row 0 (c00 c01 c02 c03)
+0.11("old0", $c00)                                     // old0 = c00
+0.11("old1", $c01)                                     // old1 = c01
+0.11("old2", $c02)                                     // old2 = c02
+0.11("old3", $c03)                                     // old3 = c03
+0.11("a0", $c00)                                       // a0 = c00
+0.11("a1", $c01)                                       // a1 = c01
+0.11("a2", $c02)                                       // a2 = c02
+0.11("a3", $c03)                                       // a3 = c03
+0.11("line_phase", 100)                                // line_phase = 100 (move_left row0)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::ml_row1_prep
+// Row 1 (c10 c11 c12 c13)
+0.11("old0", $c10)                                     // old0 = c10
+0.11("old1", $c11)                                     // old1 = c11
+0.11("old2", $c12)                                     // old2 = c12
+0.11("old3", $c13)                                     // old3 = c13
+0.11("a0", $c10)                                       // a0 = c10
+0.11("a1", $c11)                                       // a1 = c11
+0.11("a2", $c12)                                       // a2 = c12
+0.11("a3", $c13)                                       // a3 = c13
+0.11("line_phase", 101)                                // line_phase = 101 (move_left row1)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::ml_row2_prep
+// Row 2 (c20 c21 c22 c23)
+0.11("old0", $c20)                                     // old0 = c20
+0.11("old1", $c21)                                     // old1 = c21
+0.11("old2", $c22)                                     // old2 = c22
+0.11("old3", $c23)                                     // old3 = c23
+0.11("a0", $c20)                                       // a0 = c20
+0.11("a1", $c21)                                       // a1 = c21
+0.11("a2", $c22)                                       // a2 = c22
+0.11("a3", $c23)                                       // a3 = c23
+0.11("line_phase", 102)                                // line_phase = 102 (move_left row2)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::ml_row3_prep
+// Row 3 (c30 c31 c32 c33)
+0.11("old0", $c30)                                     // old0 = c30
+0.11("old1", $c31)                                     // old1 = c31
+0.11("old2", $c32)                                     // old2 = c32
+0.11("old3", $c33)                                     // old3 = c33
+0.11("a0", $c30)                                       // a0 = c30
+0.11("a1", $c31)                                       // a1 = c31
+0.11("a2", $c32)                                       // a2 = c32
+0.11("a3", $c33)                                       // a3 = c33
+0.11("line_phase", 103)                                // line_phase = 103 (move_left row3)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::after_move
+// If nothing moved, don't spawn.
+0.6(@render, $moved)                                   // if !moved => render
+0.4(@spawn)                                            // moved => spawn one tile (returns to after_spawn)
+
+::move_right
+0.11("moved", false)                                   // moved = false
+
+// Row 0 reversed (c03 c02 c01 c00)
+0.11("old0", $c03)                                     // old0 = c03
+0.11("old1", $c02)                                     // old1 = c02
+0.11("old2", $c01)                                     // old2 = c01
+0.11("old3", $c00)                                     // old3 = c00
+0.11("a0", $c03)                                       // a0 = c03
+0.11("a1", $c02)                                       // a1 = c02
+0.11("a2", $c01)                                       // a2 = c01
+0.11("a3", $c00)                                       // a3 = c00
+0.11("line_phase", 200)                                // line_phase = 200 (move_right row0)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::mr_row1_prep
+// Row 1 reversed (c13 c12 c11 c10)
+0.11("old0", $c13)                                     // old0 = c13
+0.11("old1", $c12)                                     // old1 = c12
+0.11("old2", $c11)                                     // old2 = c11
+0.11("old3", $c10)                                     // old3 = c10
+0.11("a0", $c13)                                       // a0 = c13
+0.11("a1", $c12)                                       // a1 = c12
+0.11("a2", $c11)                                       // a2 = c11
+0.11("a3", $c10)                                       // a3 = c10
+0.11("line_phase", 201)                                // line_phase = 201 (move_right row1)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::mr_row2_prep
+// Row 2 reversed (c23 c22 c21 c20)
+0.11("old0", $c23)                                     // old0 = c23
+0.11("old1", $c22)                                     // old1 = c22
+0.11("old2", $c21)                                     // old2 = c21
+0.11("old3", $c20)                                     // old3 = c20
+0.11("a0", $c23)                                       // a0 = c23
+0.11("a1", $c22)                                       // a1 = c22
+0.11("a2", $c21)                                       // a2 = c21
+0.11("a3", $c20)                                       // a3 = c20
+0.11("line_phase", 202)                                // line_phase = 202 (move_right row2)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::mr_row3_prep
+// Row 3 reversed (c33 c32 c31 c30)
+0.11("old0", $c33)                                     // old0 = c33
+0.11("old1", $c32)                                     // old1 = c32
+0.11("old2", $c31)                                     // old2 = c31
+0.11("old3", $c30)                                     // old3 = c30
+0.11("a0", $c33)                                       // a0 = c33
+0.11("a1", $c32)                                       // a1 = c32
+0.11("a2", $c31)                                       // a2 = c31
+0.11("a3", $c30)                                       // a3 = c30
+0.11("line_phase", 203)                                // line_phase = 203 (move_right row3)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+0.4(@after_move)                                       // go to after_move
+
+::move_up
+0.11("moved", false)                                   // moved = false
+
+// Col 0 (c00 c10 c20 c30)
+0.11("old0", $c00)                                     // old0 = c00
+0.11("old1", $c10)                                     // old1 = c10
+0.11("old2", $c20)                                     // old2 = c20
+0.11("old3", $c30)                                     // old3 = c30
+0.11("a0", $c00)                                       // a0 = c00
+0.11("a1", $c10)                                       // a1 = c10
+0.11("a2", $c20)                                       // a2 = c20
+0.11("a3", $c30)                                       // a3 = c30
+0.11("line_phase", 300)                                // line_phase = 300 (move_up col0)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::mu_col1_prep
+// Col 1 (c01 c11 c21 c31)
+0.11("old0", $c01)                                     // old0 = c01
+0.11("old1", $c11)                                     // old1 = c11
+0.11("old2", $c21)                                     // old2 = c21
+0.11("old3", $c31)                                     // old3 = c31
+0.11("a0", $c01)                                       // a0 = c01
+0.11("a1", $c11)                                       // a1 = c11
+0.11("a2", $c21)                                       // a2 = c21
+0.11("a3", $c31)                                       // a3 = c31
+0.11("line_phase", 301)                                // line_phase = 301 (move_up col1)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::mu_col2_prep
+// Col 2 (c02 c12 c22 c32)
+0.11("old0", $c02)                                     // old0 = c02
+0.11("old1", $c12)                                     // old1 = c12
+0.11("old2", $c22)                                     // old2 = c22
+0.11("old3", $c32)                                     // old3 = c32
+0.11("a0", $c02)                                       // a0 = c02
+0.11("a1", $c12)                                       // a1 = c12
+0.11("a2", $c22)                                       // a2 = c22
+0.11("a3", $c32)                                       // a3 = c32
+0.11("line_phase", 302)                                // line_phase = 302 (move_up col2)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::mu_col3_prep
+// Col 3 (c03 c13 c23 c33)
+0.11("old0", $c03)                                     // old0 = c03
+0.11("old1", $c13)                                     // old1 = c13
+0.11("old2", $c23)                                     // old2 = c23
+0.11("old3", $c33)                                     // old3 = c33
+0.11("a0", $c03)                                       // a0 = c03
+0.11("a1", $c13)                                       // a1 = c13
+0.11("a2", $c23)                                       // a2 = c23
+0.11("a3", $c33)                                       // a3 = c33
+0.11("line_phase", 303)                                // line_phase = 303 (move_up col3)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+0.4(@after_move)                                       // go to after_move
+
+::move_down
+0.11("moved", false)                                   // moved = false
+
+// Col 0 reversed (c30 c20 c10 c00)
+0.11("old0", $c30)                                     // old0 = c30
+0.11("old1", $c20)                                     // old1 = c20
+0.11("old2", $c10)                                     // old2 = c10
+0.11("old3", $c00)                                     // old3 = c00
+0.11("a0", $c30)                                       // a0 = c30
+0.11("a1", $c20)                                       // a1 = c20
+0.11("a2", $c10)                                       // a2 = c10
+0.11("a3", $c00)                                       // a3 = c00
+0.11("line_phase", 400)                                // line_phase = 400 (move_down col0)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::md_col1_prep
+// Col 1 reversed (c31 c21 c11 c01)
+0.11("old0", $c31)                                     // old0 = c31
+0.11("old1", $c21)                                     // old1 = c21
+0.11("old2", $c11)                                     // old2 = c11
+0.11("old3", $c01)                                     // old3 = c01
+0.11("a0", $c31)                                       // a0 = c31
+0.11("a1", $c21)                                       // a1 = c21
+0.11("a2", $c11)                                       // a2 = c11
+0.11("a3", $c01)                                       // a3 = c01
+0.11("line_phase", 401)                                // line_phase = 401 (move_down col1)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::md_col2_prep
+// Col 2 reversed (c32 c22 c12 c02)
+0.11("old0", $c32)                                     // old0 = c32
+0.11("old1", $c22)                                     // old1 = c22
+0.11("old2", $c12)                                     // old2 = c12
+0.11("old3", $c02)                                     // old3 = c02
+0.11("a0", $c32)                                       // a0 = c32
+0.11("a1", $c22)                                       // a1 = c22
+0.11("a2", $c12)                                       // a2 = c12
+0.11("a3", $c02)                                       // a3 = c02
+0.11("line_phase", 402)                                // line_phase = 402 (move_down col2)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+::md_col3_prep
+// Col 3 reversed (c33 c23 c13 c03)
+0.11("old0", $c33)                                     // old0 = c33
+0.11("old1", $c23)                                     // old1 = c23
+0.11("old2", $c13)                                     // old2 = c13
+0.11("old3", $c03)                                     // old3 = c03
+0.11("a0", $c33)                                       // a0 = c33
+0.11("a1", $c23)                                       // a1 = c23
+0.11("a2", $c13)                                       // a2 = c13
+0.11("a3", $c03)                                       // a3 = c03
+0.11("line_phase", 403)                                // line_phase = 403 (move_down col3)
+0.4(@process_line)                                     // process_line(a0..a3)
+
+0.4(@after_move)                                       // go to after_move
+
+// =========================
+// Shared line processor (slide + merge LEFT on a0..a3)
+// Updates: a0..a3, score, win
+// Returns via jump to line_return
+// =========================
+
+::process_line
+// ---- Slide left (3 passes) ----
+0.4(@pl_slide_pass1)                                   // jump slide pass 1
+
+::pl_slide_pass1
+0.20($a0, 0)                                           // a0 == 0 ?
+0.6(@pl_p1_a1, $result)                                 // if a0 != 0 skip shift
+0.11("a0", $a1)                                        // a0 = a1
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_p1_a1
+0.20($a1, 0)                                           // a1 == 0 ?
+0.6(@pl_p1_a2, $result)                                 // if a1 != 0 skip shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_p1_a2
+0.20($a2, 0)                                           // a2 == 0 ?
+0.6(@pl_slide_pass2, $result)                           // if a2 != 0 skip shift
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+::pl_slide_pass2
+0.20($a0, 0)                                           // a0 == 0 ?
+0.6(@pl_p2_a1, $result)                                 // if a0 != 0 skip shift
+0.11("a0", $a1)                                        // a0 = a1
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_p2_a1
+0.20($a1, 0)                                           // a1 == 0 ?
+0.6(@pl_p2_a2, $result)                                 // if a1 != 0 skip shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_p2_a2
+0.20($a2, 0)                                           // a2 == 0 ?
+0.6(@pl_slide_pass3, $result)                           // if a2 != 0 skip shift
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+::pl_slide_pass3
+0.20($a0, 0)                                           // a0 == 0 ?
+0.6(@pl_p3_a1, $result)                                 // if a0 != 0 skip shift
+0.11("a0", $a1)                                        // a0 = a1
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_p3_a1
+0.20($a1, 0)                                           // a1 == 0 ?
+0.6(@pl_p3_a2, $result)                                 // if a1 != 0 skip shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_p3_a2
+0.20($a2, 0)                                           // a2 == 0 ?
+0.6(@pl_merge01, $result)                               // if a2 != 0 skip shift
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+// ---- Merge a0/a1 ----
+::pl_merge01
+0.20($a0, $a1)                                         // a0 == a1 ?
+0.6(@pl_merge12, $result)                               // if not equal skip
+0.21($a0, 0)                                           // a0 != 0 ?
+0.6(@pl_merge12, $result)                               // if a0 == 0 skip
+0.15($a0, 2)                                           // a0 * 2
+0.11("a0", $result)                                    // a0 = doubled
+0.17($score, $a0)                                      // score + a0
+0.11("score", $result)                                 // score = newScore
+0.20($a0, 2048)                                        // a0 == 2048 ?
+0.6(@pl_m01_shift, $result)                             // if not 2048 skip win set
+0.11("win", true)                                      // win = true
+::pl_m01_shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+// ---- Merge a1/a2 ----
+::pl_merge12
+0.20($a1, $a2)                                         // a1 == a2 ?
+0.6(@pl_merge23, $result)                               // if not equal skip
+0.21($a1, 0)                                           // a1 != 0 ?
+0.6(@pl_merge23, $result)                               // if a1 == 0 skip
+0.15($a1, 2)                                           // a1 * 2
+0.11("a1", $result)                                    // a1 = doubled
+0.17($score, $a1)                                      // score + a1
+0.11("score", $result)                                 // score = newScore
+0.20($a1, 2048)                                        // a1 == 2048 ?
+0.6(@pl_m12_shift, $result)                             // if not 2048 skip win set
+0.11("win", true)                                      // win = true
+::pl_m12_shift
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+// ---- Merge a2/a3 ----
+::pl_merge23
+0.20($a2, $a3)                                         // a2 == a3 ?
+0.6(@pl_post_merge_slide1, $result)                     // if not equal skip
+0.21($a2, 0)                                           // a2 != 0 ?
+0.6(@pl_post_merge_slide1, $result)                     // if a2 == 0 skip
+0.15($a2, 2)                                           // a2 * 2
+0.11("a2", $result)                                    // a2 = doubled
+0.17($score, $a2)                                      // score + a2
+0.11("score", $result)                                 // score = newScore
+0.20($a2, 2048)                                        // a2 == 2048 ?
+0.6(@pl_m23_shift, $result)                             // if not 2048 skip win set
+0.11("win", true)                                      // win = true
+::pl_m23_shift
+0.11("a3", 0)                                          // a3 = 0
+
+// ---- Slide left again (3 passes) ----
+::pl_post_merge_slide1
+0.20($a0, 0)                                           // a0 == 0 ?
+0.6(@pl_pms1_a1, $result)                               // if a0 != 0 skip shift
+0.11("a0", $a1)                                        // a0 = a1
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_pms1_a1
+0.20($a1, 0)                                           // a1 == 0 ?
+0.6(@pl_pms1_a2, $result)                               // if a1 != 0 skip shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_pms1_a2
+0.20($a2, 0)                                           // a2 == 0 ?
+0.6(@pl_post_merge_slide2, $result)                     // if a2 != 0 skip shift
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+::pl_post_merge_slide2
+0.20($a0, 0)                                           // a0 == 0 ?
+0.6(@pl_pms2_a1, $result)                               // if a0 != 0 skip shift
+0.11("a0", $a1)                                        // a0 = a1
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_pms2_a1
+0.20($a1, 0)                                           // a1 == 0 ?
+0.6(@pl_pms2_a2, $result)                               // if a1 != 0 skip shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_pms2_a2
+0.20($a2, 0)                                           // a2 == 0 ?
+0.6(@pl_post_merge_slide3, $result)                     // if a2 != 0 skip shift
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+
+::pl_post_merge_slide3
+0.20($a0, 0)                                           // a0 == 0 ?
+0.6(@pl_pms3_a1, $result)                               // if a0 != 0 skip shift
+0.11("a0", $a1)                                        // a0 = a1
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_pms3_a1
+0.20($a1, 0)                                           // a1 == 0 ?
+0.6(@pl_pms3_a2, $result)                               // if a1 != 0 skip shift
+0.11("a1", $a2)                                        // a1 = a2
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+::pl_pms3_a2
+0.20($a2, 0)                                           // a2 == 0 ?
+0.6(@line_return, $result)                              // if a2 != 0 done
+0.11("a2", $a3)                                        // a2 = a3
+0.11("a3", 0)                                          // a3 = 0
+0.4(@line_return)                                      // return
+
+// =========================
+// Return dispatcher for line processor
+// Stores a0..a3 back to correct cells, updates moved, then continues.
+// =========================
+
+::line_return
+// ---- move_left returns ----
+0.20($line_phase, 100)                                  // phase == 100 ?
+0.5(@lr_ml_row0, $result)                               // if yes -> lr_ml_row0
+0.20($line_phase, 101)                                  // phase == 101 ?
+0.5(@lr_ml_row1, $result)                               // if yes -> lr_ml_row1
+0.20($line_phase, 102)                                  // phase == 102 ?
+0.5(@lr_ml_row2, $result)                               // if yes -> lr_ml_row2
+0.20($line_phase, 103)                                  // phase == 103 ?
+0.5(@lr_ml_row3, $result)                               // if yes -> lr_ml_row3
+
+// ---- move_right returns ----
+0.20($line_phase, 200)                                  // phase == 200 ?
+0.5(@lr_mr_row0, $result)                               // if yes -> lr_mr_row0
+0.20($line_phase, 201)                                  // phase == 201 ?
+0.5(@lr_mr_row1, $result)                               // if yes -> lr_mr_row1
+0.20($line_phase, 202)                                  // phase == 202 ?
+0.5(@lr_mr_row2, $result)                               // if yes -> lr_mr_row2
+0.20($line_phase, 203)                                  // phase == 203 ?
+0.5(@lr_mr_row3, $result)                               // if yes -> lr_mr_row3
+
+// ---- move_up returns ----
+0.20($line_phase, 300)                                  // phase == 300 ?
+0.5(@lr_mu_col0, $result)                               // if yes -> lr_mu_col0
+0.20($line_phase, 301)                                  // phase == 301 ?
+0.5(@lr_mu_col1, $result)                               // if yes -> lr_mu_col1
+0.20($line_phase, 302)                                  // phase == 302 ?
+0.5(@lr_mu_col2, $result)                               // if yes -> lr_mu_col2
+0.20($line_phase, 303)                                  // phase == 303 ?
+0.5(@lr_mu_col3, $result)                               // if yes -> lr_mu_col3
+
+// ---- move_down returns ----
+0.20($line_phase, 400)                                  // phase == 400 ?
+0.5(@lr_md_col0, $result)                               // if yes -> lr_md_col0
+0.20($line_phase, 401)                                  // phase == 401 ?
+0.5(@lr_md_col1, $result)                               // if yes -> lr_md_col1
+0.20($line_phase, 402)                                  // phase == 402 ?
+0.5(@lr_md_col2, $result)                               // if yes -> lr_md_col2
+0.20($line_phase, 403)                                  // phase == 403 ?
+0.5(@lr_md_col3, $result)                               // if yes -> lr_md_col3
+
+0.4(@render)                                            // fallback: render
+
+::lr_update_moved
+// moved = moved OR (old0 != new0) OR (old1 != new1) OR (old2 != new2) OR (old3 != new3)
+0.21($old0, $new0)                                      // old0 != new0
+0.27($moved, $result)                                   // moved OR diff
+0.11("moved", $result)                                  // moved = ...
+0.21($old1, $new1)                                      // old1 != new1
+0.27($moved, $result)                                   // moved OR diff
+0.11("moved", $result)                                  // moved = ...
+0.21($old2, $new2)                                      // old2 != new2
+0.27($moved, $result)                                   // moved OR diff
+0.11("moved", $result)                                  // moved = ...
+0.21($old3, $new3)                                      // old3 != new3
+0.27($moved, $result)                                   // moved OR diff
+0.11("moved", $result)                                  // moved = ...
+0.4(@lr_continue)                                       // continue
+
+::lr_ml_row0
+0.11("c00", $a0)                                        // c00 = a0
+0.11("c01", $a1)                                        // c01 = a1
+0.11("c02", $a2)                                        // c02 = a2
+0.11("c03", $a3)                                        // c03 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 1)                                      // lr_next = 1
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_ml_row1
+0.11("c10", $a0)                                        // c10 = a0
+0.11("c11", $a1)                                        // c11 = a1
+0.11("c12", $a2)                                        // c12 = a2
+0.11("c13", $a3)                                        // c13 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 2)                                      // lr_next = 2
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_ml_row2
+0.11("c20", $a0)                                        // c20 = a0
+0.11("c21", $a1)                                        // c21 = a1
+0.11("c22", $a2)                                        // c22 = a2
+0.11("c23", $a3)                                        // c23 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 3)                                      // lr_next = 3
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_ml_row3
+0.11("c30", $a0)                                        // c30 = a0
+0.11("c31", $a1)                                        // c31 = a1
+0.11("c32", $a2)                                        // c32 = a2
+0.11("c33", $a3)                                        // c33 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 4)                                      // lr_next = 4
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mr_row0
+// store back reversed: (a0 a1 a2 a3) corresponds to (c03 c02 c01 c00)
+0.11("c03", $a0)                                        // c03 = a0
+0.11("c02", $a1)                                        // c02 = a1
+0.11("c01", $a2)                                        // c01 = a2
+0.11("c00", $a3)                                        // c00 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 10)                                     // lr_next = 10
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mr_row1
+0.11("c13", $a0)                                        // c13 = a0
+0.11("c12", $a1)                                        // c12 = a1
+0.11("c11", $a2)                                        // c11 = a2
+0.11("c10", $a3)                                        // c10 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 11)                                     // lr_next = 11
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mr_row2
+0.11("c23", $a0)                                        // c23 = a0
+0.11("c22", $a1)                                        // c22 = a1
+0.11("c21", $a2)                                        // c21 = a2
+0.11("c20", $a3)                                        // c20 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 12)                                     // lr_next = 12
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mr_row3
+0.11("c33", $a0)                                        // c33 = a0
+0.11("c32", $a1)                                        // c32 = a1
+0.11("c31", $a2)                                        // c31 = a2
+0.11("c30", $a3)                                        // c30 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 13)                                     // lr_next = 13
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mu_col0
+0.11("c00", $a0)                                        // c00 = a0
+0.11("c10", $a1)                                        // c10 = a1
+0.11("c20", $a2)                                        // c20 = a2
+0.11("c30", $a3)                                        // c30 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 20)                                     // lr_next = 20
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mu_col1
+0.11("c01", $a0)                                        // c01 = a0
+0.11("c11", $a1)                                        // c11 = a1
+0.11("c21", $a2)                                        // c21 = a2
+0.11("c31", $a3)                                        // c31 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 21)                                     // lr_next = 21
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mu_col2
+0.11("c02", $a0)                                        // c02 = a0
+0.11("c12", $a1)                                        // c12 = a1
+0.11("c22", $a2)                                        // c22 = a2
+0.11("c32", $a3)                                        // c32 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 22)                                     // lr_next = 22
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_mu_col3
+0.11("c03", $a0)                                        // c03 = a0
+0.11("c13", $a1)                                        // c13 = a1
+0.11("c23", $a2)                                        // c23 = a2
+0.11("c33", $a3)                                        // c33 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 23)                                     // lr_next = 23
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_md_col0
+// store back reversed: (a0 a1 a2 a3) corresponds to (c30 c20 c10 c00)
+0.11("c30", $a0)                                        // c30 = a0
+0.11("c20", $a1)                                        // c20 = a1
+0.11("c10", $a2)                                        // c10 = a2
+0.11("c00", $a3)                                        // c00 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 30)                                     // lr_next = 30
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_md_col1
+0.11("c31", $a0)                                        // c31 = a0
+0.11("c21", $a1)                                        // c21 = a1
+0.11("c11", $a2)                                        // c11 = a2
+0.11("c01", $a3)                                        // c01 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 31)                                     // lr_next = 31
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_md_col2
+0.11("c32", $a0)                                        // c32 = a0
+0.11("c22", $a1)                                        // c22 = a1
+0.11("c12", $a2)                                        // c12 = a2
+0.11("c02", $a3)                                        // c02 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 32)                                     // lr_next = 32
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_md_col3
+0.11("c33", $a0)                                        // c33 = a0
+0.11("c23", $a1)                                        // c23 = a1
+0.11("c13", $a2)                                        // c13 = a2
+0.11("c03", $a3)                                        // c03 = a3
+0.11("new0", $a0)                                       // new0 = a0
+0.11("new1", $a1)                                       // new1 = a1
+0.11("new2", $a2)                                       // new2 = a2
+0.11("new3", $a3)                                       // new3 = a3
+0.11("lr_next", 33)                                     // lr_next = 33
+0.4(@lr_update_moved)                                   // update moved
+
+::lr_continue
+// Continue to next line or finish the move.
+0.20($lr_next, 1)                                       // lr_next == 1 ?
+0.5(@ml_row1_prep, $result)                             // move_left row1
+0.20($lr_next, 2)                                       // lr_next == 2 ?
+0.5(@ml_row2_prep, $result)                             // move_left row2
+0.20($lr_next, 3)                                       // lr_next == 3 ?
+0.5(@ml_row3_prep, $result)                             // move_left row3
+0.20($lr_next, 4)                                       // lr_next == 4 ?
+0.5(@after_move, $result)                               // move_left done
+
+0.20($lr_next, 10)                                      // lr_next == 10 ?
+0.5(@mr_row1_prep, $result)                             // move_right row1
+0.20($lr_next, 11)                                      // lr_next == 11 ?
+0.5(@mr_row2_prep, $result)                             // move_right row2
+0.20($lr_next, 12)                                      // lr_next == 12 ?
+0.5(@mr_row3_prep, $result)                             // move_right row3
+0.20($lr_next, 13)                                      // lr_next == 13 ?
+0.5(@after_move, $result)                               // move_right done
+
+0.20($lr_next, 20)                                      // lr_next == 20 ?
+0.5(@mu_col1_prep, $result)                             // move_up col1
+0.20($lr_next, 21)                                      // lr_next == 21 ?
+0.5(@mu_col2_prep, $result)                             // move_up col2
+0.20($lr_next, 22)                                      // lr_next == 22 ?
+0.5(@mu_col3_prep, $result)                             // move_up col3
+0.20($lr_next, 23)                                      // lr_next == 23 ?
+0.5(@after_move, $result)                               // move_up done
+
+0.20($lr_next, 30)                                      // lr_next == 30 ?
+0.5(@md_col1_prep, $result)                             // move_down col1
+0.20($lr_next, 31)                                      // lr_next == 31 ?
+0.5(@md_col2_prep, $result)                             // move_down col2
+0.20($lr_next, 32)                                      // lr_next == 32 ?
+0.5(@md_col3_prep, $result)                             // move_down col3
+0.20($lr_next, 33)                                      // lr_next == 33 ?
+0.5(@after_move, $result)                               // move_down done
+
+0.4(@after_move)                                       // fallback
+
+// =========================
+// Spawn a new tile (2 with 90%, 4 with 10%)
+// - On reset, spawns two tiles using spawn_phase 0->1->2.
+// - After a move, spawns one tile (spawn_phase remains 2).
+// Returns via jump to after_spawn.
+// =========================
+
+::spawn
+// Count empties
+0.11("emptyCount", 0)                                   // emptyCount = 0
+
+0.20($c00, 0)                                           // c00 == 0 ?
+0.6(@sp_c01, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c01
+0.20($c01, 0)                                           // c01 == 0 ?
+0.6(@sp_c02, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c02
+0.20($c02, 0)                                           // c02 == 0 ?
+0.6(@sp_c03, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c03
+0.20($c03, 0)                                           // c03 == 0 ?
+0.6(@sp_c10, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c10
+0.20($c10, 0)                                           // c10 == 0 ?
+0.6(@sp_c11, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c11
+0.20($c11, 0)                                           // c11 == 0 ?
+0.6(@sp_c12, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c12
+0.20($c12, 0)                                           // c12 == 0 ?
+0.6(@sp_c13, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c13
+0.20($c13, 0)                                           // c13 == 0 ?
+0.6(@sp_c20, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c20
+0.20($c20, 0)                                           // c20 == 0 ?
+0.6(@sp_c21, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c21
+0.20($c21, 0)                                           // c21 == 0 ?
+0.6(@sp_c22, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c22
+0.20($c22, 0)                                           // c22 == 0 ?
+0.6(@sp_c23, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c23
+0.20($c23, 0)                                           // c23 == 0 ?
+0.6(@sp_c30, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c30
+0.20($c30, 0)                                           // c30 == 0 ?
+0.6(@sp_c31, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c31
+0.20($c31, 0)                                           // c31 == 0 ?
+0.6(@sp_c32, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c32
+0.20($c32, 0)                                           // c32 == 0 ?
+0.6(@sp_c33, $result)                                   // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+::sp_c33
+0.20($c33, 0)                                           // c33 == 0 ?
+0.6(@sp_after_count, $result)                            // if not empty skip
+0.17($emptyCount, 1)                                    // emptyCount + 1
+0.11("emptyCount", $result)                             // emptyCount = ...
+
+::sp_after_count
+// If no empty cells, skip spawn
+0.20($emptyCount, 0)                                    // emptyCount == 0 ?
+0.5(@after_spawn, $result)                              // if yes -> after_spawn
+
+// Choose tile value: 4 with 10% chance, else 2
+2.12(0, 1)                                              // random_float(0, 1)
+0.23($result, 0.1)                                      // rand < 0.1 ?
+0.6(@sp_value_is_2, $result)                             // if not (<0.1) => use 2
+0.11("spawnValue", 4)                                   // spawnValue = 4
+0.4(@sp_pick_target)                                    // continue
+::sp_value_is_2
+0.11("spawnValue", 2)                                   // spawnValue = 2
+
+::sp_pick_target
+0.18($emptyCount, 1)                                    // emptyCount - 1
+0.11("maxEmptyIndex", $result)                           // maxEmptyIndex = emptyCount - 1
+2.11(0, $maxEmptyIndex)                                 // random_int(0, maxEmptyIndex)
+0.11("targetEmpty", $result)                             // targetEmpty = random empty ordinal
+0.11("curEmpty", 0)                                      // curEmpty = 0
+
+// Scan cells again and place on the target empty
+0.20($c00, 0)                                           // c00 == 0 ?
+0.6(@sp2_c01, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc0, $result)                                  // if not equal, increment curEmpty
+0.11("c00", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc0
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c01
+0.20($c01, 0)                                           // c01 == 0 ?
+0.6(@sp2_c02, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc1, $result)                                  // if not equal, increment curEmpty
+0.11("c01", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc1
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c02
+0.20($c02, 0)                                           // c02 == 0 ?
+0.6(@sp2_c03, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc2, $result)                                  // if not equal, increment curEmpty
+0.11("c02", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc2
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c03
+0.20($c03, 0)                                           // c03 == 0 ?
+0.6(@sp2_c10, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc3, $result)                                  // if not equal, increment curEmpty
+0.11("c03", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc3
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c10
+0.20($c10, 0)                                           // c10 == 0 ?
+0.6(@sp2_c11, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc4, $result)                                  // if not equal, increment curEmpty
+0.11("c10", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc4
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c11
+0.20($c11, 0)                                           // c11 == 0 ?
+0.6(@sp2_c12, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc5, $result)                                  // if not equal, increment curEmpty
+0.11("c11", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc5
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c12
+0.20($c12, 0)                                           // c12 == 0 ?
+0.6(@sp2_c13, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc6, $result)                                  // if not equal, increment curEmpty
+0.11("c12", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc6
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c13
+0.20($c13, 0)                                           // c13 == 0 ?
+0.6(@sp2_c20, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc7, $result)                                  // if not equal, increment curEmpty
+0.11("c13", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc7
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c20
+0.20($c20, 0)                                           // c20 == 0 ?
+0.6(@sp2_c21, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc8, $result)                                  // if not equal, increment curEmpty
+0.11("c20", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc8
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c21
+0.20($c21, 0)                                           // c21 == 0 ?
+0.6(@sp2_c22, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc9, $result)                                  // if not equal, increment curEmpty
+0.11("c21", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc9
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c22
+0.20($c22, 0)                                           // c22 == 0 ?
+0.6(@sp2_c23, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc10, $result)                                 // if not equal, increment curEmpty
+0.11("c22", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc10
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c23
+0.20($c23, 0)                                           // c23 == 0 ?
+0.6(@sp2_c30, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc11, $result)                                 // if not equal, increment curEmpty
+0.11("c23", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc11
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c30
+0.20($c30, 0)                                           // c30 == 0 ?
+0.6(@sp2_c31, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc12, $result)                                 // if not equal, increment curEmpty
+0.11("c30", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc12
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c31
+0.20($c31, 0)                                           // c31 == 0 ?
+0.6(@sp2_c32, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc13, $result)                                 // if not equal, increment curEmpty
+0.11("c31", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc13
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c32
+0.20($c32, 0)                                           // c32 == 0 ?
+0.6(@sp2_c33, $result)                                   // if not empty skip
+0.20($curEmpty, $targetEmpty)                            // curEmpty == targetEmpty ?
+0.6(@sp2_inc14, $result)                                 // if not equal, increment curEmpty
+0.11("c32", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+::sp2_inc14
+0.17($curEmpty, 1)                                      // curEmpty + 1
+0.11("curEmpty", $result)                               // curEmpty = ...
+::sp2_c33
+0.20($c33, 0)                                           // c33 == 0 ?
+0.6(@after_spawn, $result)                               // if not empty -> done (shouldn't happen)
+0.11("c33", $spawnValue)                                 // place tile
+0.4(@after_spawn)                                       // done
+
+// =========================
+// After spawn: handle initial double-spawn + recompute gameOver
+// =========================
+
+::after_spawn
+// Spawn twice on reset (spawn_phase 0 -> 1 -> 2)
+0.20($spawn_phase, 0)                                   // spawn_phase == 0 ?
+0.6(@sp_phase1_check, $result)                           // if not, check next
+0.11("spawn_phase", 1)                                   // spawn_phase = 1
+0.4(@spawn)                                             // spawn again
+::sp_phase1_check
+0.20($spawn_phase, 1)                                   // spawn_phase == 1 ?
+0.6(@check_game_over, $result)                           // if not, just check game over
+0.11("spawn_phase", 2)                                   // spawn_phase = 2
+0.4(@spawn)                                             // spawn again
+
+::check_game_over
+// gameOver = (no empties) AND (no adjacent equals)
+0.11("hasEmpty", false)                                  // hasEmpty = false
+
+// Any empty?
+0.20($c00, 0)                                           // c00 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c01, 0)                                           // c01 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c02, 0)                                           // c02 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c03, 0)                                           // c03 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c10, 0)                                           // c10 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c11, 0)                                           // c11 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c12, 0)                                           // c12 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c13, 0)                                           // c13 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c20, 0)                                           // c20 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c21, 0)                                           // c21 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c22, 0)                                           // c22 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c23, 0)                                           // c23 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c30, 0)                                           // c30 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c31, 0)                                           // c31 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c32, 0)                                           // c32 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+0.20($c33, 0)                                           // c33 == 0 ?
+0.27($hasEmpty, $result)                                 // hasEmpty OR equals
+0.11("hasEmpty", $result)                                // hasEmpty = ...
+
+// If hasEmpty, gameOver = false
+0.5(@go_not_over, $hasEmpty)                             // if hasEmpty -> not over
+
+// No empties: check adjacent equals
+0.11("hasMerge", false)                                  // hasMerge = false
+
+// Horizontal adjacents
+0.20($c00, $c01)                                        // c00 == c01
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c01, $c02)                                        // c01 == c02
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c02, $c03)                                        // c02 == c03
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c10, $c11)                                        // c10 == c11
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c11, $c12)                                        // c11 == c12
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c12, $c13)                                        // c12 == c13
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c20, $c21)                                        // c20 == c21
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c21, $c22)                                        // c21 == c22
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c22, $c23)                                        // c22 == c23
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c30, $c31)                                        // c30 == c31
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c31, $c32)                                        // c31 == c32
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c32, $c33)                                        // c32 == c33
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+
+// Vertical adjacents
+0.20($c00, $c10)                                        // c00 == c10
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c10, $c20)                                        // c10 == c20
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c20, $c30)                                        // c20 == c30
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c01, $c11)                                        // c01 == c11
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c11, $c21)                                        // c11 == c21
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c21, $c31)                                        // c21 == c31
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c02, $c12)                                        // c02 == c12
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c12, $c22)                                        // c12 == c22
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c22, $c32)                                        // c22 == c32
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c03, $c13)                                        // c03 == c13
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c13, $c23)                                        // c13 == c23
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+0.20($c23, $c33)                                        // c23 == c33
+0.27($hasMerge, $result)                                 // hasMerge OR eq
+0.11("hasMerge", $result)                                // hasMerge = ...
+
+// gameOver = !hasMerge
+0.28($hasMerge)                                         // not(hasMerge)
+0.11("gameOver", $result)                                // gameOver = !hasMerge
+0.4(@render)                                            // render
+
+::go_not_over
+0.11("gameOver", false)                                  // gameOver = false
+0.4(@render)                                            // render
+
+// =========================
+// Render
+// =========================
+
+::render
+// Background
+2.2(250, 248, 239)                                      // clear_screen(r,g,b)
+
+// Title + score + instructions
+2.5("2048", 20, 30, 36, 60, 58, 50)                      // draw_text("2048", x,y,size, rgb)
+2.5("Score:", 20, 80, 20, 80, 80, 80)                    // draw_text("Score:", ...)
+2.5($score, 95, 80, 20, 80, 80, 80)                      // draw_text(score, ...)
+2.5("Arrows: move   R: restart   Esc: quit", 20, 110, 16, 120, 120, 120) // help text
+
+// Board background
+2.3(15, 135, 470, 470, 187, 173, 160)                    // draw_rect(board background)
+
+// Helper: draw tile background for each cell (simple colors)
+// Tile positions: x=[25,135,245,355], y=[145,255,365,475], size=100
+
+// Row 0
+2.3(25, 145, 100, 100, 205, 193, 180)                    // tile bg
+0.21($c00, 0)                                            // c00 != 0 ?
+0.6(@r0c1_bg, $result)                                    // if empty, skip text
+2.3(25, 145, 100, 100, 238, 228, 218)                    // filled tile bg
+2.5($c00, 60, 205, 24, 60, 58, 50)                       // tile text
+::r0c1_bg
+2.3(135, 145, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c01, 0)                                            // c01 != 0 ?
+0.6(@r0c2_bg, $result)                                    // if empty, skip text
+2.3(135, 145, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c01, 170, 205, 24, 60, 58, 50)                      // tile text
+::r0c2_bg
+2.3(245, 145, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c02, 0)                                            // c02 != 0 ?
+0.6(@r0c3_bg, $result)                                    // if empty, skip text
+2.3(245, 145, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c02, 280, 205, 24, 60, 58, 50)                      // tile text
+::r0c3_bg
+2.3(355, 145, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c03, 0)                                            // c03 != 0 ?
+0.6(@r1c0_bg, $result)                                    // if empty, skip text
+2.3(355, 145, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c03, 390, 205, 24, 60, 58, 50)                      // tile text
+
+// Row 1
+::r1c0_bg
+2.3(25, 255, 100, 100, 205, 193, 180)                    // tile bg
+0.21($c10, 0)                                            // c10 != 0 ?
+0.6(@r1c1_bg, $result)                                    // if empty, skip text
+2.3(25, 255, 100, 100, 238, 228, 218)                    // filled tile bg
+2.5($c10, 60, 315, 24, 60, 58, 50)                       // tile text
+::r1c1_bg
+2.3(135, 255, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c11, 0)                                            // c11 != 0 ?
+0.6(@r1c2_bg, $result)                                    // if empty, skip text
+2.3(135, 255, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c11, 170, 315, 24, 60, 58, 50)                      // tile text
+::r1c2_bg
+2.3(245, 255, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c12, 0)                                            // c12 != 0 ?
+0.6(@r1c3_bg, $result)                                    // if empty, skip text
+2.3(245, 255, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c12, 280, 315, 24, 60, 58, 50)                      // tile text
+::r1c3_bg
+2.3(355, 255, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c13, 0)                                            // c13 != 0 ?
+0.6(@r2c0_bg, $result)                                    // if empty, skip text
+2.3(355, 255, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c13, 390, 315, 24, 60, 58, 50)                      // tile text
+
+// Row 2
+::r2c0_bg
+2.3(25, 365, 100, 100, 205, 193, 180)                    // tile bg
+0.21($c20, 0)                                            // c20 != 0 ?
+0.6(@r2c1_bg, $result)                                    // if empty, skip text
+2.3(25, 365, 100, 100, 238, 228, 218)                    // filled tile bg
+2.5($c20, 60, 425, 24, 60, 58, 50)                       // tile text
+::r2c1_bg
+2.3(135, 365, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c21, 0)                                            // c21 != 0 ?
+0.6(@r2c2_bg, $result)                                    // if empty, skip text
+2.3(135, 365, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c21, 170, 425, 24, 60, 58, 50)                      // tile text
+::r2c2_bg
+2.3(245, 365, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c22, 0)                                            // c22 != 0 ?
+0.6(@r2c3_bg, $result)                                    // if empty, skip text
+2.3(245, 365, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c22, 280, 425, 24, 60, 58, 50)                      // tile text
+::r2c3_bg
+2.3(355, 365, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c23, 0)                                            // c23 != 0 ?
+0.6(@r3c0_bg, $result)                                    // if empty, skip text
+2.3(355, 365, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c23, 390, 425, 24, 60, 58, 50)                      // tile text
+
+// Row 3
+::r3c0_bg
+2.3(25, 475, 100, 100, 205, 193, 180)                    // tile bg
+0.21($c30, 0)                                            // c30 != 0 ?
+0.6(@r3c1_bg, $result)                                    // if empty, skip text
+2.3(25, 475, 100, 100, 238, 228, 218)                    // filled tile bg
+2.5($c30, 60, 535, 24, 60, 58, 50)                       // tile text
+::r3c1_bg
+2.3(135, 475, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c31, 0)                                            // c31 != 0 ?
+0.6(@r3c2_bg, $result)                                    // if empty, skip text
+2.3(135, 475, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c31, 170, 535, 24, 60, 58, 50)                      // tile text
+::r3c2_bg
+2.3(245, 475, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c32, 0)                                            // c32 != 0 ?
+0.6(@r3c3_bg, $result)                                    // if empty, skip text
+2.3(245, 475, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c32, 280, 535, 24, 60, 58, 50)                      // tile text
+::r3c3_bg
+2.3(355, 475, 100, 100, 205, 193, 180)                   // tile bg
+0.21($c33, 0)                                            // c33 != 0 ?
+0.6(@render_messages, $result)                            // if empty, skip text
+2.3(355, 475, 100, 100, 238, 228, 218)                   // filled tile bg
+2.5($c33, 390, 535, 24, 60, 58, 50)                      // tile text
+
+::render_messages
+// Overlay messages
+0.5(@msg_win, $win)                                      // if win => show win message
+0.5(@msg_game_over, $gameOver)                           // if gameOver => show game over message
+0.4(@present_frame)                                     // else present
+
+::msg_win
+2.5("You made 2048!", 20, 615, 18, 80, 120, 80)          // win message
+0.4(@present_frame)                                     // present
+
+::msg_game_over
+2.5("Game Over - Press R to restart", 20, 615, 18, 180, 60, 60) // game over message
+0.4(@present_frame)                                     // present
+
+::present_frame
+2.6()                                                   // present()
+2.10(16)                                                // delay(16ms)
+0.4(@loop)                                              // loop
+
+::exit
+2.1()                                                   // close_window()
+0.1()                                                   // stop()
+

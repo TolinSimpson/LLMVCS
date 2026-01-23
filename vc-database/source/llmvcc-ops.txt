@@ -1,0 +1,59 @@
+nop | No operation. Does nothing, continues to next instruction.
+
+stop | Halts execution immediately.
+
+error | Throws an error with a message parameter. Parameters: message.
+
+skip | Skips the next N instructions. Parameters: count.
+
+jump | Jumps to instruction at index N. Parameters: index.
+
+jump_if | Jumps to index N if condition is true. Parameters: index, condition.
+
+jump_if_not | Jumps to index N if condition is false. Parameters: index, condition.
+
+push | Pushes a value onto the stack. Parameters: value.
+
+pop | Pops and discards the top value from the stack.
+
+dup | Duplicates the top value on the stack.
+
+swap | Swaps the top two values on the stack.
+
+store | Stores a value in a named variable. Parameters: name, value.
+
+load | Loads a variable value onto the stack. Parameters: name.
+
+print | Prints a value to output. Parameters: value.
+
+modulus | Applies modulus to two numbers. Parameters: a, b.
+
+multiply | Multiplies two numbers. Parameters: a, b.
+
+divide | Divides two numbers. Parameters: a, b.
+
+add | Adds two numbers. Parameters: a, b.
+
+subtract | Subtracts two numbers. Parameters: a, b.
+
+power | Raises x to the power of y. Parameters: a, b.
+
+equals | Checks if two values are equal. Parameters: a, b.
+
+not_equals | Checks if two values are not equal. Parameters: a, b.
+
+greater_than | Checks if first value is greater than second. Parameters: a, b.
+
+less_than | Checks if first value is less than second. Parameters: a, b.
+
+greater_or_equal | Checks if first value is greater than or equal to second. Parameters: a, b.
+
+less_or_equal | Checks if first value is less than or equal to second. Parameters: a, b.
+
+and | Logical AND of two boolean values. Parameters: a, b.
+
+or | Logical OR of two boolean values. Parameters: a, b.
+
+not | Logical NOT of a boolean value. Parameters: value.
+
+xor | Logical XOR of two boolean values. Parameters: a, b.
