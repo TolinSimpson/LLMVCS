@@ -1,8 +1,10 @@
-# LLMVCS
+# LLMVCS (Large Language Model Vectorized Code Stack)
 
-LLMVCS reduces LLM agent token costs by turning “what to do” into tiny, stable instruction references that a deterministic interpreter can execute.
+> ⚠️ **EXPERIMENTAL** – This project is theoretical & pending benchmarks, the JavaScript interpreter is functional but not widely tested. Use at your own risk.
 
-Instead of having the LLM repeatedly re-describe common operations in natural language, you define those operations once in human-readable `.txt` catalogs, index them for semantic search, and then have the LLM output compact `.vcs` programs that reference operations by numeric IDs.
+LLMVCS reduces LLM agent token costs by turning prompts into tiny, stable instruction references that a deterministic interpreter can execute.
+
+Instead of having the LLM repeatedly re-describe common operations in natural language, you define those operations once in human-readable `.txt` catalogs, index them for semantic search, and then have the LLM output compact `.vcs` programs that reference operations by numeric IDs. The .vcs (vectorized code stack) can then be interpreted via a plugin for your software environment by including a small interpreter and static code modules correlating to the human-readable operations. Overall this should save tokens on thinking by offloading that to a vector search client side then saves tokens via the output format in the response. The interpreter plugin is Turing complete and mimics CPU architecture. This makes it fast and requires only static function calls that enable operations to be implemented however the user likes for their environment. If an LLM gets confused while generating a .vcs file it can always refer to the human readable catalog or correlating function library directly if the vector search produced insufficient results due to poor human description. Early benchmarks suggest a 90% token reduction if initial prompts contain sufficient keywords.
 
 ## The algorithm (in simple terms)
 
