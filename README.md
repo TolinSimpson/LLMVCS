@@ -119,3 +119,18 @@ Recommended convention (optional): put a version header at the top of `.vcs` pro
 - Sandbox or validate inputs if `.vcs` can come from untrusted sources.
 - Keep module/opcode mappings stable; changing IDs is a breaking change.
 
+
+## License
+
+Modified BSL 1.1 | see for permissions for entities under $1,000,000 in revenue this license will switch to MIT 4 years after 1/23/2026.
+https://github.com/TolinSimpson/LLMVCS/tree/main?tab=License-1-ov-file#readme
+
+### Commercial & Enterprise Use
+If you are an Enterprise user or are selling derivatives to one (per the LICENSE), please contact me privately for royalty processing:
+
+Go to the Security tab above.
+
+Click Report a vulnerability.
+
+Subject: "Commercial Royalty Report - [Your Company Name]".
+
