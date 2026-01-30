@@ -23,6 +23,7 @@ Thumbs.db
 Desktop.ini
 
 .vscode/
+.cursor/
 .idea/
 
 # Build / cache
